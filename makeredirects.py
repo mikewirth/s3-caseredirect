@@ -1,56 +1,28 @@
 #!/usr/bin/env python
-# This code is Public Domain.
-# Author: Michael Wirth
 
-import sys, os.path
+"""
+This script takes a file on S3 and creates a redirect from every possible
+permutation of case to the original file.
+
+Author: Michael Wirth (https://github.com/mikewirth/s3-caseredirect/)
+"""
+
+import sys
+import os.path
+import argparse
 
 try:
     import boto.s3.connection
-    from boto.s3.key import Key
-    from boto.exception import S3ResponseError
+
 except:
     print "boto library (http://code.google.com/p/boto/) for aws needs to be installed"
     sys.exit(1)
 
-try:
-    import awscreds
-except:
-    print "awscreds.py file needed with access and secret globals for aws access"
-    sys.exit(1)
-
-"""
-Script for compacting aws logs for s3 access.
-s3 can be configured to store logs for s3 access. Logs are also stored in s3
-as files. Unfortunately, the number of log files is huge: apparently amazon
-generates 216 small log files per day.
-
-This script combines all log files for one day into one file, compresses them
-with bzip2, re-upload such combined log file back to s3 and deletes original
-log files.
-
-How it works, roughly:
-* download all logs for one day from s3 locally
-* combine them into one file & gzip
-* upload back to s3
-* delete the original files
-* repeat until there are no more logs to process
-"""
-
-s3BucketName = "dealini-test"   # Bucket name without trailing slash
-
-g_s3conn = None
 filenames = None
 
 
-def s3connection():
-    global g_s3conn
-    if g_s3conn is None:
-        g_s3conn = boto.s3.connection.S3Connection(awscreds.access, awscreds.secret, True)
-    return g_s3conn
-
-
-def make_case_insensitive(key):
-    # Get filename permutations
+def make_case_insensitive(bucket, access, secret, key):
+    """ Get filename permutations """
     global filenames
     filenames = []
     filename = os.path.basename(key)
@@ -58,41 +30,16 @@ def make_case_insensitive(key):
 
     filename_permutations(filename)
 
-    b = s3connection().get_bucket(s3BucketName)
-    config = b.get_website_configuration()
-    suffix = config['WebsiteConfiguration']['IndexDocument']['Suffix']
-    error_key = config['WebsiteConfiguration']['ErrorDocument']['Key']
-
-    rules = boto.s3.website.RoutingRules()
-
+    connection = boto.s3.connection.S3Connection(access, secret, True)
+    b = connection.get_bucket(bucket)
+    
     for fname in filenames:
         if fname == filename:
             continue
         
-        newrule = boto.s3.website.RoutingRule.when(key_prefix=os.path.join(path, fname)).then_redirect(replace_key=key)
-        rules.add_rule(newrule)
+        k = b.new_key(os.path.join(path, fname))
+        k.set_redirect(key)
 
-    b.configure_website(suffix=suffix, error_key=error_key, routing_rules=rules)
-
-
-    #k = b.get_key(path)
-
-    #k = k.copy(k.bucket.name, k.name, {'myKey': 'myValue'}, preserve_acl=True)
-
-    # Fetch all files we have to match
-    """
-    all_keys = b.list(logsToCompact)
-    for day_keys in gen_files_for_day(all_keys):
-        process_day(day_keys)
-        limit -= 1
-        if limit <= 0:
-            break
-    print("Had to delete %d files of total size %d bytes" % (g_total_deleted, g_total_deleted_size))
-    if 0 != g_uncompressed_size:
-        saved = g_uncompressed_size - g_compressed_size
-        saved_percent = float(100) * float(saved) / float(g_uncompressed_size)
-        print("Compressed size: %d, uncompressed size: %d, saving: %d which is %.2f %%" % (g_compressed_size, g_uncompressed_size, saved, saved_percent))        
-        """
 
 def filename_permutations(filename, pos=0):
     if len(filename) == pos:
@@ -109,9 +56,17 @@ def filename_permutations(filename, pos=0):
 
 
 def main():
-    #filename_permutations("DE_App.jpg")
-    #print filenames
-    make_case_insensitive("de_app.jpg")
+    """ CLI """
+    parser = argparse.ArgumentParser()
+    
+    parser.add_argument("access", help="AWS credentials: access code")
+    parser.add_argument("secret", help="AWS credentials: secret")
+    parser.add_argument("bucket", help="Name of Amazon S3 bucket")
+    parser.add_argument("key", help="Name of the key to make available case-insensitively. (Starts with a slash.)")
+
+    args = parser.parse_args()
+
+    make_case_insensitive(args.bucket, args.access, args.secret, args.key)
 
 if __name__ == "__main__":
     main()
